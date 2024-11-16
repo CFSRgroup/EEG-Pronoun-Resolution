@@ -1,0 +1,116 @@
+% 加载.mat文件中的特征
+data = load('C:\Users\15234\Desktop\FS_test\feature.mat');
+time_features = data.time_features;
+frequency_features = data.frequency_features;
+% sg滤波
+% time_features = sgolayfilt(time_features, 15, 19);
+% frequency_features = sgolayfilt(frequency_features, 15, 19);
+
+% 读取CSV文件中的标签
+labels = readmatrix('C:\Users\15234\Desktop\FS_test\label.csv', 'OutputType', 'double');
+
+% 合并时域和频域特征以进行特征选择
+combined_features = [time_features frequency_features];
+
+% 应用 ILFS 特征选择 
+[X, Y] = deal(combined_features, labels);  % 准备输入数据
+verbose = 1;  % 如果你想在执行时看到详细输出，可以设置 verbose 为 1
+TT = 3;  % 设置 ILFS 方法的 TT 参数
+[selected_indices, weights] = ILFS(X, Y, TT, verbose);
+
+
+% 设置随机种子
+rng(1); % 使用固定的种子确保每次结果一致
+
+% 测试不同的特征百分比
+feature_percentages = 0.05:0.05:1;  % 从5%到100%的特征    起始：步长：结束
+accuracy_results = zeros(length(feature_percentages), 1);  % 存储每个百分比的准确率
+confusion_matrices = cell(length(feature_percentages), 1);  % 存储每个百分比的混淆矩阵
+
+for p = 1:length(feature_percentages)
+    % 选择前X%的特征索引
+    num_features_to_select = floor(length(selected_indices) * feature_percentages(p));
+    current_selected_indices = selected_indices(1:num_features_to_select);
+
+    % 使用选定的索引过滤特征
+    filtered_features = combined_features(:, current_selected_indices);
+
+    % 初始化训练集和测试集变量
+    features_train = [];
+    features_test = [];
+    labels_train = [];
+    labels_test = [];
+
+    % 遍历每个被试的数据，每个被试有200个样本
+    for subject = 1:20  % 假设有20个被试
+        for label = 0:2  % 标签为0, 1, 2
+            % 获取当前被试当前标签的索引
+            idx = find(labels((subject-1)*200 + 1 : subject*200) == label);
+            idx = idx + (subject-1)*200;  % 转换为全局索引
+            
+            % 计算训练样本和测试样本的数量
+            num_train = floor(length(idx) * 0.7);
+            
+            % 随机打乱索引
+            idx = idx(randperm(length(idx)));
+            
+            % 划分训练集和测试集
+            train_idx = idx(1:num_train);
+            test_idx = idx(num_train+1:end);
+            
+            % 收集训练集 
+            features_train = [features_train; filtered_features(train_idx, :)];
+            labels_train = [labels_train; labels(train_idx)];
+            
+            % 收集测试集
+            features_test = [features_test; filtered_features(test_idx, :)];
+            labels_test = [labels_test; labels(test_idx)];
+        end
+    end
+
+    %*************************
+
+    % SVM
+    %model = fitcecoc(features_train, labels_train, 'Learners', 'svm');
+
+    % KNN
+    K = 50;  % 设置邻居数
+    model = fitcknn(features_train, labels_train, 'NumNeighbors', K);
+
+    % LDA（线性判别器）
+    %model = fitcdiscr(features_train, labels_train);
+
+    % 随机森林RF  记得下面预测标签转换
+    %model = TreeBagger(200, features_train, labels_train, 'Method', 'classification');
+
+    % 逻辑回归LR
+    %template = templateLinear('Learner', 'logistic');
+    %model = fitcecoc(features_train, labels_train, 'Learners', template);
+    
+    %*************************
+
+    % 使用测试集评估模型
+    predictions = predict(model, features_test);
+
+    % 随机森林  将预测结果从cell转换为适当的格式
+    %predictions = str2double(predictions);
+
+    
+    % 计算准确率
+    accuracy = sum(predictions == labels_test) / numel(labels_test);
+    accuracy_results(p) = accuracy;
+    fprintf('Using %.0f%% of features, classification accuracy: %.2f%%\n', feature_percentages(p)*100, accuracy * 100);
+
+
+    % 计算并存储混淆矩阵
+    confMat = confusionmat(labels_test, predictions);
+    confusion_matrices{p} = confMat;
+    fprintf('Confusion Matrix:\n');
+    disp(confMat);
+end
+
+% 找到并显示最高准确率及其对应的百分比和混淆矩阵
+[max_accuracy, idx_max] = max(accuracy_results);
+fprintf('\nHighest classification accuracy: %.2f%% using %.0f%% of features.\n', max_accuracy * 100, feature_percentages(idx_max)*100);
+disp('Confusion Matrix for the highest accuracy:');
+disp(confusion_matrices{idx_max});
